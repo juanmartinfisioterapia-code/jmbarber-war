@@ -6,6 +6,11 @@ const DAYS_FULL = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábad
 const MONTHS = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 const BUSINESS_SLUG = 'jmbarber';
 
+const SERVICES = [
+  { id: 'corte', name: 'Corte', duration: 30, price: '', icon: '✂️' },
+  { id: 'corte_barba', name: 'Corte y barba', duration: 60, price: '', icon: '✂️🪒' },
+];
+
 function timeToMin(t) { const [h, m] = t.split(':').map(Number); return h * 60 + m; }
 function minToTime(m) { return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); }
 function getInitials(name) { return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2); }
@@ -48,14 +53,11 @@ function Toast({ msg, show }) {
   return <div style={s.toast(show)}>{msg}</div>;
 }
 
-function Loading() {
-  return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '50vh', color: '#c9a84c', fontSize: 14 }}>Cargando...</div>;
-}
-
 export default function App() {
   const [view, setView] = useState('cliente');
   const [panel, setPanel] = useState('pendientes');
   const [step, setStep] = useState(1);
+  const [selectedService, setSelectedService] = useState(null);
   const [selectedDate, setSelectedDate] = useState(null);
   const [selectedTime, setSelectedTime] = useState(null);
   const [calYear, setCalYear] = useState(new Date().getFullYear());
@@ -99,16 +101,12 @@ export default function App() {
     async function init() {
       setLoading(true);
       const biz = await loadBusiness();
-      if (biz) {
-        await loadHorario(biz.id);
-        await loadCitas(biz.id);
-      }
+      if (biz) { await loadHorario(biz.id); await loadCitas(biz.id); }
       setLoading(false);
     }
     init();
   }, [loadBusiness, loadHorario, loadCitas]);
 
-  // Realtime — citas en tiempo real
   useEffect(() => {
     if (!business) return;
     const channel = supabase.channel('appointments-changes')
@@ -124,28 +122,30 @@ export default function App() {
   const offset = firstDay === 0 ? 6 : firstDay - 1;
 
   function getSlots() {
-    if (!selectedDate || !horario) return [];
+    if (!selectedDate || !selectedService) return [];
     const dow = new Date(selectedDate + 'T12:00:00').getDay();
     const dowIdx = dow === 0 ? 6 : dow - 1;
     const h = horario[dowIdx];
     if (!h || !h.active) return [];
+    const duration = selectedService.duration;
     const slots = [];
-    // L-V: 10-14 y 17-21
     const isSaturday = dowIdx === 5;
     if (isSaturday) {
       let cur = timeToMin('10:00');
-      while (cur < timeToMin('14:00')) { slots.push(minToTime(cur)); cur += 60; }
+      while (cur + duration <= timeToMin('14:00')) { slots.push(minToTime(cur)); cur += duration; }
     } else {
       let cur = timeToMin('10:00');
-      while (cur < timeToMin('14:00')) { slots.push(minToTime(cur)); cur += 60; }
+      while (cur + duration <= timeToMin('14:00')) { slots.push(minToTime(cur)); cur += duration; }
       cur = timeToMin('17:00');
-      while (cur < timeToMin('21:00')) { slots.push(minToTime(cur)); cur += 60; }
+      while (cur + duration <= timeToMin('21:00')) { slots.push(minToTime(cur)); cur += duration; }
     }
     return slots;
   }
 
   function getTakenSlots() {
-    return citas.filter(c => c.date === selectedDate && c.status !== 'rejected' && c.status !== 'cancelled').map(c => c.time.slice(0, 5));
+    return citas
+      .filter(c => c.date === selectedDate && c.status !== 'rejected' && c.status !== 'cancelled')
+      .map(c => c.time.slice(0, 5));
   }
 
   async function handleSubmit() {
@@ -157,16 +157,16 @@ export default function App() {
       client_phone: tel,
       date: selectedDate,
       time: selectedTime,
-      notes: nota,
+      notes: `${selectedService.name}${nota ? ' — ' + nota : ''}`,
       status: 'pending'
     });
     if (error) { showToast('Error al enviar, inténtalo de nuevo'); setSubmitting(false); return; }
-    setStep(4);
+    setStep(5);
     setSubmitting(false);
   }
 
   function resetClient() {
-    setStep(1); setSelectedDate(null); setSelectedTime(null);
+    setStep(1); setSelectedService(null); setSelectedDate(null); setSelectedTime(null);
     setNombre(''); setTel(''); setNota('');
   }
 
@@ -198,6 +198,8 @@ export default function App() {
   const byDate = {};
   confirmadas.forEach(c => { if (!byDate[c.date]) byDate[c.date] = []; byDate[c.date].push(c); });
 
+  const STEPS = ['Servicio', 'Fecha', 'Hora', 'Datos', 'Listo'];
+
   if (loading) return (
     <div style={{ minHeight: '100vh', background: '#111', fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}>
       <div style={s.nav}>
@@ -206,7 +208,7 @@ export default function App() {
           <div><p style={s.brandName}>JMBARBER_WAR</p><p style={s.brandSub}>Barbershop</p></div>
         </div>
       </div>
-      <Loading />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '50vh', color: '#c9a84c', fontSize: 14 }}>Cargando...</div>
     </div>
   );
 
@@ -228,28 +230,50 @@ export default function App() {
           <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
             <div style={{ width: 72, height: 72, borderRadius: '50%', background: '#1a1a1a', border: '2px solid #c9a84c', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 0.75rem', fontSize: 32 }}>✂️</div>
             <h2 style={{ fontSize: 20, fontWeight: 600, color: '#fff' }}>Reserva tu cita</h2>
-            <p style={{ fontSize: 13, color: '#888', marginTop: 4 }}>
-              {business ? business.name : 'JMBARBER_WAR'}
-            </p>
+            <p style={{ fontSize: 13, color: '#888', marginTop: 4 }}>{business ? business.name : 'JMBARBER_WAR'}</p>
           </div>
 
+          {/* Steps */}
           <div style={{ display: 'flex', alignItems: 'center', marginBottom: '1.5rem' }}>
-            {[1, 2, 3, 4].map((n, i) => (
-              <React.Fragment key={n}>
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-                  <div style={s.stepDot(step > n ? 'done' : step === n ? 'active' : 'idle')}>
-                    {step > n ? '✓' : n}
+            {STEPS.map((label, i) => {
+              const n = i + 1;
+              return (
+                <React.Fragment key={n}>
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                    <div style={s.stepDot(step > n ? 'done' : step === n ? 'active' : 'idle')}>
+                      {step > n ? '✓' : n}
+                    </div>
+                    <span style={{ fontSize: 10, color: step === n ? '#c9a84c' : '#555', fontWeight: step === n ? 600 : 400 }}>{label}</span>
                   </div>
-                  <span style={{ fontSize: 11, color: step === n ? '#c9a84c' : '#555', fontWeight: step === n ? 600 : 400 }}>
-                    {['Fecha', 'Hora', 'Datos', 'Listo'][i]}
-                  </span>
-                </div>
-                {i < 3 && <div style={{ flex: '0 0 30px', height: 1, background: '#2a2a2a', marginBottom: 18 }} />}
-              </React.Fragment>
-            ))}
+                  {i < STEPS.length - 1 && <div style={{ flex: '0 0 20px', height: 1, background: '#2a2a2a', marginBottom: 18 }} />}
+                </React.Fragment>
+              );
+            })}
           </div>
 
+          {/* Step 1: Servicio */}
           {step === 1 && (
+            <>
+              <div style={s.card}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#888', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>¿Qué necesitas?</div>
+                {SERVICES.map(svc => (
+                  <div key={svc.id} onClick={() => setSelectedService(svc)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderRadius: 12, border: `1px solid ${selectedService?.id === svc.id ? '#c9a84c' : '#2a2a2a'}`, background: selectedService?.id === svc.id ? 'rgba(201,168,76,0.1)' : '#111', cursor: 'pointer', marginBottom: 8 }}>
+                    <span style={{ fontSize: 24 }}>{svc.icon}</span>
+                    <div style={{ flex: 1 }}>
+                      <p style={{ fontSize: 15, fontWeight: 600, color: '#fff', margin: 0 }}>{svc.name}</p>
+                      <p style={{ fontSize: 12, color: '#888', margin: '2px 0 0' }}>{svc.duration} minutos</p>
+                    </div>
+                    {selectedService?.id === svc.id && <span style={{ color: '#c9a84c', fontSize: 18 }}>✓</span>}
+                  </div>
+                ))}
+              </div>
+              <button disabled={!selectedService} onClick={() => setStep(2)} style={selectedService ? s.btnGold : s.btnGoldDisabled}>Continuar</button>
+            </>
+          )}
+
+          {/* Step 2: Calendario */}
+          {step === 2 && (
             <>
               <div style={s.card}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
@@ -280,14 +304,19 @@ export default function App() {
                   })}
                 </div>
               </div>
-              <button disabled={!selectedDate} onClick={() => setStep(2)} style={selectedDate ? s.btnGold : s.btnGoldDisabled}>Continuar</button>
+              <div style={s.row}>
+                <button onClick={() => setStep(1)} style={s.btnGray}>Atrás</button>
+                <button disabled={!selectedDate} onClick={() => setStep(3)} style={selectedDate ? s.btnGold : s.btnGoldDisabled}>Continuar</button>
+              </div>
             </>
           )}
 
-          {step === 2 && (
+          {/* Step 3: Horas */}
+          {step === 3 && (
             <>
               <div style={s.card}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#888', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{selectedDate ? formatDate(selectedDate) : 'Horas disponibles'}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#888', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{selectedDate ? formatDate(selectedDate) : ''}</div>
+                <div style={{ fontSize: 12, color: '#666', marginBottom: 12 }}>{selectedService?.name} · {selectedService?.duration} min</div>
                 <div style={s.timeGrid}>
                   {getSlots().map(slot => {
                     const taken = getTakenSlots().includes(slot);
@@ -302,13 +331,14 @@ export default function App() {
                 </div>
               </div>
               <div style={s.row}>
-                <button onClick={() => setStep(1)} style={s.btnGray}>Atrás</button>
-                <button disabled={!selectedTime} onClick={() => setStep(3)} style={selectedTime ? s.btnGold : s.btnGoldDisabled}>Continuar</button>
+                <button onClick={() => setStep(2)} style={s.btnGray}>Atrás</button>
+                <button disabled={!selectedTime} onClick={() => setStep(4)} style={selectedTime ? s.btnGold : s.btnGoldDisabled}>Continuar</button>
               </div>
             </>
           )}
 
-          {step === 3 && (
+          {/* Step 4: Datos */}
+          {step === 4 && (
             <>
               <div style={s.card}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: '#888', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Tus datos</div>
@@ -322,11 +352,11 @@ export default function App() {
                 </div>
                 <div>
                   <label style={s.label}>Notas (opcional)</label>
-                  <input style={s.input} type="text" placeholder="Ej: Corte y barba" value={nota} onChange={e => setNota(e.target.value)} />
+                  <input style={s.input} type="text" placeholder="Ej: Degradado bajo" value={nota} onChange={e => setNota(e.target.value)} />
                 </div>
               </div>
               <div style={s.row}>
-                <button onClick={() => setStep(2)} style={s.btnGray}>Atrás</button>
+                <button onClick={() => setStep(3)} style={s.btnGray}>Atrás</button>
                 <button disabled={nombre.length < 3 || tel.length < 9 || submitting} onClick={handleSubmit} style={nombre.length >= 3 && tel.length >= 9 && !submitting ? s.btnGold : s.btnGoldDisabled}>
                   {submitting ? 'Enviando...' : 'Solicitar cita'}
                 </button>
@@ -334,13 +364,14 @@ export default function App() {
             </>
           )}
 
-          {step === 4 && (
+          {/* Step 5: Éxito */}
+          {step === 5 && (
             <div style={{ textAlign: 'center', paddingTop: '1rem' }}>
               <div style={s.successIcon}>✓</div>
               <h2 style={{ fontSize: 18, fontWeight: 600, color: '#fff', marginBottom: 8 }}>Solicitud enviada</h2>
               <p style={{ fontSize: 13, color: '#888', marginBottom: '1.5rem' }}>Hola {nombre.split(' ')[0]}, el peluquero confirmará tu cita pronto.</p>
               <div style={s.card}>
-                {[['Fecha', formatDate(selectedDate)], ['Hora', selectedTime], ['WhatsApp', tel]].map(([k, v]) => (
+                {[['Servicio', selectedService?.name], ['Fecha', formatDate(selectedDate)], ['Hora', selectedTime], ['WhatsApp', tel]].map(([k, v]) => (
                   <div key={k} style={{ display: 'flex', gap: 12, marginBottom: 8 }}>
                     <span style={{ fontSize: 12, color: '#666', minWidth: 60 }}>{k}</span>
                     <span style={{ fontSize: 13, fontWeight: 600, color: '#ccc' }}>{v}</span>
@@ -376,7 +407,7 @@ export default function App() {
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <p style={{ fontSize: 14, fontWeight: 600, color: '#fff', margin: 0 }}>{c.client_name}</p>
                       <p style={{ fontSize: 12, color: '#888', margin: '2px 0 0' }}>📅 {formatDate(c.date)} · 🕐 {c.time.slice(0, 5)}</p>
-                      {c.notes && <p style={{ fontSize: 12, color: '#666', margin: '4px 0 0', fontStyle: 'italic' }}>"{c.notes}"</p>}
+                      {c.notes && <p style={{ fontSize: 12, color: '#c9a84c', margin: '4px 0 0' }}>{c.notes}</p>}
                     </div>
                     <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                       <button onClick={() => confirmar(c.id)} style={s.btnConfirm}>✓ Confirmar</button>
@@ -400,7 +431,7 @@ export default function App() {
                       <div key={c.id} style={s.agendaSlot}>
                         <span style={{ fontSize: 13, fontWeight: 600, color: '#c9a84c', minWidth: 48 }}>{c.time.slice(0, 5)}</span>
                         <span style={{ fontSize: 13, color: '#ccc', flex: 1 }}>{c.client_name}</span>
-                        <span style={{ fontSize: 12, color: '#666' }}>{c.notes || '—'}</span>
+                        <span style={{ fontSize: 12, color: '#888' }}>{c.notes || '—'}</span>
                         <span style={{ fontSize: 11, background: 'rgba(45,122,79,0.2)', color: '#4caf7d', borderRadius: 99, padding: '2px 8px' }}>✓</span>
                       </div>
                     ))}
